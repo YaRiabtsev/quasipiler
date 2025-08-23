@@ -246,6 +246,12 @@ void reader::read_string(std::string& into) {
     advance_char();
 }
 
+void reader::read_digits(std::string& into) {
+    do {
+        into += get_char();
+    } while (is_valid() && std::isdigit(peek_uchar()));
+}
+
 void reader::read_integer_part(std::string& into) {
     if (is_valid() && peek_char() == '0') {
         into += get_char();
@@ -253,9 +259,7 @@ void reader::read_integer_part(std::string& into) {
             throw make_error("leading zeros not allowed");
         }
     } else if (is_valid() && std::isdigit(peek_uchar())) {
-        do {
-            into += get_char();
-        } while (is_valid() && std::isdigit(peek_uchar()));
+        read_digits(into);
     } else {
         throw make_error("expected digit");
     }
@@ -267,29 +271,32 @@ bool reader::read_fraction_part(std::string& into) {
         if (!is_valid() || !std::isdigit(peek_uchar())) {
             throw make_error("digit expected after decimal");
         }
-        while (is_valid() && std::isdigit(peek_uchar())) {
-            into += get_char();
-        }
+        read_digits(into);
         return true;
     }
     return false;
 }
 
 bool reader::read_exponent_part(std::string& into) {
-    if (is_valid() && (peek_char() == 'e' || peek_char() == 'E')) {
-        into += get_char();
-        if (is_valid() && (peek_char() == '+' || peek_char() == '-')) {
-            into += get_char();
-        }
-        if (!is_valid() || !std::isdigit(peek_uchar())) {
-            throw make_error("digit expected after exponent");
-        }
-        while (is_valid() && std::isdigit(peek_uchar())) {
-            into += get_char();
-        }
-        return true;
+    if (!is_valid()) {
+        return false;
     }
-    return false;
+    char c = peek_char();
+    if (c != 'e' && c != 'E') {
+        return false;
+    }
+    into += get_char();
+    if (is_valid()) {
+        c = peek_char();
+        if (c == '+' || c == '-') {
+            into += get_char();
+        }
+    }
+    if (!is_valid() || !std::isdigit(peek_uchar())) {
+        throw make_error("digit expected after exponent");
+    }
+    read_digits(into);
+    return true;
 }
 
 token_kind reader::read_number(std::string& into) {
