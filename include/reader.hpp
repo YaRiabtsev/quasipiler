@@ -146,6 +146,7 @@ private:
      */
     token_kind read_number(std::string& into);
     // Helpers for numeric literal parsing
+    bool check_digit() const noexcept;
     void read_digits(std::string& into);
     void read_integer_part(std::string& into);
     bool read_fraction_part(std::string& into);

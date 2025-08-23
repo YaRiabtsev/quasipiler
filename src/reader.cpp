@@ -247,30 +247,28 @@ void reader::read_string(std::string& into) {
 }
 
 void reader::read_digits(std::string& into) {
+    if (!check_digit()) {
+        throw make_error("digit expected after decimal");
+    }
     do {
         into += get_char();
-    } while (is_valid() && std::isdigit(peek_uchar()));
+    } while (check_digit());
 }
 
 void reader::read_integer_part(std::string& into) {
     if (is_valid() && peek_char() == '0') {
         into += get_char();
-        if (is_valid() && std::isdigit(peek_uchar())) {
+        if (check_digit()) {
             throw make_error("leading zeros not allowed");
         }
-    } else if (is_valid() && std::isdigit(peek_uchar())) {
-        read_digits(into);
     } else {
-        throw make_error("expected digit");
+        read_digits(into);
     }
 }
 
 bool reader::read_fraction_part(std::string& into) {
     if (is_valid() && peek_char() == '.') {
         into += get_char();
-        if (!is_valid() || !std::isdigit(peek_uchar())) {
-            throw make_error("digit expected after decimal");
-        }
         read_digits(into);
         return true;
     }
@@ -282,7 +280,7 @@ bool reader::read_exponent_part(std::string& into) {
         return false;
     }
     char c = peek_char();
-    if (c != 'e' && c != 'E') {
+    if (std::tolower(c) != 'e') {
         return false;
     }
     into += get_char();
@@ -291,9 +289,6 @@ bool reader::read_exponent_part(std::string& into) {
         if (c == '+' || c == '-') {
             into += get_char();
         }
-    }
-    if (!is_valid() || !std::isdigit(peek_uchar())) {
-        throw make_error("digit expected after exponent");
     }
     read_digits(into);
     return true;
@@ -307,6 +302,10 @@ token_kind reader::read_number(std::string& into) {
         is_float = true;
     }
     return is_float ? token_kind::floating : token_kind::integer;
+}
+
+bool reader::check_digit() const noexcept {
+    return is_valid() && std::isdigit(peek_uchar());
 }
 
 void reader::init_token(token& t) const noexcept {
