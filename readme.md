@@ -44,6 +44,10 @@ This repo is my sanctuary under license — it begs mercy, not stars. I’ll bel
 
 **See [include](include/) and [src](src/) for implementation, and check [tests](tests/) for more examples.**
 
+---
+
+**See `include/frontend` and `src/frontend` for implementation, and check `tests/frontend` for more examples.**
+
 
 ## Documentation and Contributing
 
