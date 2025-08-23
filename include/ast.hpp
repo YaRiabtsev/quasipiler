@@ -152,6 +152,22 @@ struct callexp_node : token_node {
 
 using callexp_ptr = std::shared_ptr<callexp_node>;
 
+struct imcallexp_node : ast_node {
+    ast_node_ptr callee;
+    ast_node_ptr paren;
+    bool has_paren { false };
+
+    explicit imcallexp_node(ast_node_ptr callee);
+    void set_paren(ast_node_ptr paren);
+
+    const position& get_start() const override;
+    void dump(
+        std::ostream& os, const std::string& prefix, bool is_last, bool full
+    ) const override;
+};
+
+using imcallexp_ptr = std::shared_ptr<imcallexp_node>;
+
 struct fundecl_node : callexp_node {
     ast_node_ptr body;
     bool has_body { false };

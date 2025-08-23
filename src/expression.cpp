@@ -25,6 +25,8 @@
 #include "expression.hpp"
 
 #include <array>
+#include <source_location>
+#include <sstream>
 #include <string_view>
 #include <unordered_map>
 
@@ -129,7 +131,7 @@ ast_node_ptr expression::parse_expression(
             auto middle = parse_expression(items, idx, 0);
             if (idx >= items.size() || !items[idx].is_op
                 || items[idx].tok.word != ":") {
-                throw std::runtime_error("expected ':' in ternary expression");
+                throw make_error("expected ':' in ternary expression", items);
             }
             token ctok = items[idx].tok;
             ++idx;
@@ -168,7 +170,7 @@ ast_node_ptr expression::parse_prefix(std::vector<item>& items, size_t& idx) {
         }
     }
     if (idx >= items.size()) {
-        throw std::runtime_error("unexpected end");
+        throw make_error("unexpected end", items);
     }
     auto node = items[idx].node;
     ++idx;
@@ -183,4 +185,29 @@ ast_node_ptr expression::parse_prefix(std::vector<item>& items, size_t& idx) {
         node = std::make_shared<unary_node>(tok, node, false, prec);
     }
     return node;
+}
+
+std::runtime_error expression::make_error(
+    const std::string& message, const std::vector<item>& expression,
+    const std::source_location& location
+) {
+    std::ostringstream oss;
+    oss << "[Expression-Error] " << message << ". ";
+    if (!expression.empty()) {
+        oss << "while parsing expression: ";
+        for (const auto& it : expression) {
+            if (it.is_op) {
+                oss << it.tok.word << ' ';
+            } else if (auto tn
+                       = std::dynamic_pointer_cast<token_node>(it.node)) {
+                oss << tn->value.word << ' ';
+            } else {
+                oss << "<node> ";
+            }
+        }
+        oss << '\n';
+    }
+    oss << "in file: " << location.file_name() << '(' << location.line() << ':'
+        << location.column() << ") `" << location.function_name() << "`";
+    return std::runtime_error(oss.str());
 }

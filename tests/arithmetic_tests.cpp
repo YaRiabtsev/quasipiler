@@ -33,7 +33,7 @@ TEST(ArithmeticTest, ParseBinary) {
     std::string input = "a+b";
     reader r { input };
     grouper g { r };
-    auto res = g.parse();
+    const auto res = g.parse();
     ASSERT_EQ(res->kind, group_kind::file);
     ASSERT_EQ(res->size(), 1u);
     auto* cmd = dynamic_cast<group_node*>(res->nodes[0].get());
@@ -47,7 +47,7 @@ TEST(ArithmeticTest, ParsePrefixUnary) {
     std::string input = "+a";
     reader r { input };
     grouper g { r };
-    auto res = g.parse();
+    const auto res = g.parse();
     ASSERT_EQ(res->kind, group_kind::file);
     ASSERT_EQ(res->size(), 1u);
     auto* cmd = dynamic_cast<group_node*>(res->nodes[0].get());
@@ -61,7 +61,7 @@ TEST(ArithmeticTest, ParsePostfixUnary) {
     std::string input = "a++";
     reader r { input };
     grouper g { r };
-    auto res = g.parse();
+    const auto res = g.parse();
     ASSERT_EQ(res->kind, group_kind::file);
     ASSERT_EQ(res->size(), 1u);
     auto* cmd = dynamic_cast<group_node*>(res->nodes[0].get());
@@ -115,7 +115,7 @@ TEST(ExpressionTest, TernaryBranches) {
 
     idx = 0;
     n = expression::parse_expression(items, idx, 3);
-    auto tok = std::dynamic_pointer_cast<token_node>(n);
+    const auto tok = std::dynamic_pointer_cast<token_node>(n);
     ASSERT_TRUE(tok);
     EXPECT_EQ(tok->value.word, "a");
     EXPECT_EQ(idx, 1u);

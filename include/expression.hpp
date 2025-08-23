@@ -26,6 +26,7 @@
 #define EXPRESSION_HPP
 
 #include "ast.hpp"
+#include <source_location>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -73,6 +74,11 @@ private:
 
     static bool match_op(
         const std::vector<ast_node_ptr>& nodes, size_t pos, std::string_view op
+    );
+
+    static std::runtime_error make_error(
+        const std::string& message, const std::vector<item>& expression,
+        const std::source_location& location = std::source_location::current()
     );
 
     static const std::unordered_map<std::string, std::pair<int, bool>>

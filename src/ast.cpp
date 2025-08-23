@@ -237,6 +237,34 @@ void callexp_node::dump(
     }
 }
 
+imcallexp_node::imcallexp_node(ast_node_ptr c)
+    : callee(std::move(c)) {
+    fixed_size += callee->fixed_size;
+    full_size += callee->full_size;
+}
+
+void imcallexp_node::set_paren(ast_node_ptr p) {
+    paren = std::move(p);
+    has_paren = true;
+    fixed_size += paren->fixed_size;
+    full_size += paren->full_size;
+}
+
+const position& imcallexp_node::get_start() const {
+    return callee->get_start();
+}
+
+void imcallexp_node::dump(
+    std::ostream& os, const std::string& prefix, bool is_last, bool full
+) const {
+    os << prefix << (is_last ? "`-" : "|-") << "ImplicitCall\n";
+    const std::string child_prefix = prefix + (is_last ? "  " : "| ");
+    callee->dump(os, child_prefix, !has_paren, full);
+    if (has_paren) {
+        paren->dump(os, child_prefix, true, full);
+    }
+}
+
 fundecl_node::fundecl_node(const callexp_ptr& proto)
     : callexp_node(proto ? proto->value : token {}) {
     if (proto) {

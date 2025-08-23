@@ -246,47 +246,66 @@ void reader::read_string(std::string& into) {
     advance_char();
 }
 
-token_kind reader::read_number(std::string& into) {
-    into.clear();
-    bool is_float = false;
+void reader::read_digits(std::string& into) {
+    if (!check_digit()) {
+        throw make_error("digit expected after decimal");
+    }
+    do {
+        into += get_char();
+    } while (check_digit());
+}
+
+void reader::read_integer_part(std::string& into) {
     if (is_valid() && peek_char() == '0') {
         into += get_char();
-        if (is_valid() && std::isdigit(peek_uchar())) {
+        if (check_digit()) {
             throw make_error("leading zeros not allowed");
         }
-    } else if (is_valid() && std::isdigit(peek_uchar())) {
-        do {
-            into += get_char();
-        } while (is_valid() && std::isdigit(peek_uchar()));
     } else {
-        throw make_error("expected digit");
+        read_digits(into);
     }
+}
 
+bool reader::read_fraction_part(std::string& into) {
     if (is_valid() && peek_char() == '.') {
-        is_float = true;
         into += get_char();
-        if (!is_valid() || !std::isdigit(peek_uchar())) {
-            throw make_error("digit expected after decimal");
-        }
-        while (is_valid() && std::isdigit(peek_uchar())) {
+        read_digits(into);
+        return true;
+    }
+    return false;
+}
+
+bool reader::read_exponent_part(std::string& into) {
+    if (!is_valid()) {
+        return false;
+    }
+    char c = peek_char();
+    if (std::tolower(c) != 'e') {
+        return false;
+    }
+    into += get_char();
+    if (is_valid()) {
+        c = peek_char();
+        if (c == '+' || c == '-') {
             into += get_char();
         }
     }
+    read_digits(into);
+    return true;
+}
 
-    if (is_valid() && (peek_char() == 'e' || peek_char() == 'E')) {
+token_kind reader::read_number(std::string& into) {
+    into.clear();
+    read_integer_part(into);
+    bool is_float = read_fraction_part(into);
+    if (read_exponent_part(into)) {
         is_float = true;
-        into += get_char();
-        if (is_valid() && (peek_char() == '+' || peek_char() == '-')) {
-            into += get_char();
-        }
-        if (!is_valid() || !std::isdigit(peek_uchar())) {
-            throw make_error("digit expected after exponent");
-        }
-        while (is_valid() && std::isdigit(peek_uchar())) {
-            into += get_char();
-        }
     }
     return is_float ? token_kind::floating : token_kind::integer;
+}
+
+bool reader::check_digit() const noexcept {
+    return is_valid() && std::isdigit(peek_uchar());
 }
 
 void reader::init_token(token& t) const noexcept {

@@ -26,6 +26,7 @@
 #define GROUPER_HPP
 
 #include "ast.hpp"
+#include <vector>
 
 /**
  * @brief Parses tokens into hierarchical groups and expressions.
@@ -62,12 +63,24 @@ private:
     [[nodiscard]] bool
     handle_chain(const group_ptr& result, const group_ptr& inode) const;
 
+    [[nodiscard]] static bool is_secondary_keyword(const std::string& kw);
+    [[nodiscard]] static std::string
+    keyword_from_node(const ast_node_ptr& node);
+    [[nodiscard]] group_ptr fetch_previous_command(
+        const group_ptr& result, const std::string& kw, const group_ptr& inode
+    ) const;
+    [[nodiscard]] std::string fetch_previous_keyword(
+        const group_ptr& prev, const std::string& kw, const group_ptr& inode
+    ) const;
+    void validate_chain(
+        const std::string& prev_kw, const std::string& kw,
+        const group_ptr& inode
+    ) const;
+
     bool append_group(
         const group_ptr& result, const ast_node_ptr& node,
         bool& wait_for_condition, bool& wait_for_body, group_kind kind
     ) const;
-
-    void identify_body(const group_ptr& group) const;
 
     void identify(const group_ptr& group, const group_ptr& result) const;
     /**
