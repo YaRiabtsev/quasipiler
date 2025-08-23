@@ -24,6 +24,10 @@
 
 #include "expression.hpp"
 
+#include <array>
+#include <source_location>
+#include <sstream>
+#include <string_view>
 #include <unordered_map>
 
 const std::unordered_map<std::string, std::pair<int, bool>>
@@ -50,25 +54,25 @@ const std::unordered_map<std::string, int> expression::prefix_ops
 const std::unordered_map<std::string, int> expression::postfix_ops
     = { { "++", 14 }, { "--", 14 } };
 
-token expression::make_token(const token_node& tn, const std::string& word) {
+token expression::make_token(const token_node& tn, std::string_view word) {
     token t = tn.value;
     t.word = word;
     return t;
 }
 
 bool expression::match_op(
-    const std::vector<ast_node_ptr>& nodes, const size_t pos,
-    const std::string& op
+    const std::vector<ast_node_ptr>& nodes, size_t pos, std::string_view op
 ) {
     if (pos + op.size() > nodes.size()) {
         return false;
     }
-    for (size_t i = 0; i < op.size(); ++i) {
-        if (const auto tn
-            = std::dynamic_pointer_cast<token_node>(nodes[pos + i]);
-            !tn || tn->value.word != std::string(1, op[i])) {
+    size_t i = 0;
+    for (char c : op) {
+        const auto tn = std::dynamic_pointer_cast<token_node>(nodes[pos + i]);
+        if (!tn || tn->value.word != std::string(1, c)) {
             return false;
         }
+        ++i;
     }
     return true;
 }
@@ -80,71 +84,23 @@ expression::make_items(const std::vector<ast_node_ptr>& nodes) {
         if (auto tn = std::dynamic_pointer_cast<token_node>(nodes[i])) {
             if (tn->value.kind == token_kind::special_character
                 || tn->value.kind == token_kind::separator) {
-                token tok;
+                static constexpr std::array<std::string_view, 20> multi_ops {
+                    "<<=", ">>=", "++", "--", "+=", "-=", "*=",
+                    "/=",  "%=",  "^=", "|=", "&=", "==", "!=",
+                    "<=",  ">=",  "<<", ">>", "&&", "||"
+                };
+
+                std::string_view op = tn->value.word;
                 size_t len = 1;
-                std::string op = tn->value.word;
-                if (match_op(nodes, i, "<<=")) {
-                    op = "<<=";
-                    len = 3;
-                } else if (match_op(nodes, i, ">>=")) {
-                    op = ">>=";
-                    len = 3;
-                } else if (match_op(nodes, i, "++")) {
-                    op = "++";
-                    len = 2;
-                } else if (match_op(nodes, i, "--")) {
-                    op = "--";
-                    len = 2;
-                } else if (match_op(nodes, i, "+=")) {
-                    op = "+=";
-                    len = 2;
-                } else if (match_op(nodes, i, "-=")) {
-                    op = "-=";
-                    len = 2;
-                } else if (match_op(nodes, i, "*=")) {
-                    op = "*=";
-                    len = 2;
-                } else if (match_op(nodes, i, "/=")) {
-                    op = "/=";
-                    len = 2;
-                } else if (match_op(nodes, i, "%=")) {
-                    op = "%=";
-                    len = 2;
-                } else if (match_op(nodes, i, "^=")) {
-                    op = "^=";
-                    len = 2;
-                } else if (match_op(nodes, i, "|=")) {
-                    op = "|=";
-                    len = 2;
-                } else if (match_op(nodes, i, "&=")) {
-                    op = "&=";
-                    len = 2;
-                } else if (match_op(nodes, i, "==")) {
-                    op = "==";
-                    len = 2;
-                } else if (match_op(nodes, i, "!=")) {
-                    op = "!=";
-                    len = 2;
-                } else if (match_op(nodes, i, "<=")) {
-                    op = "<=";
-                    len = 2;
-                } else if (match_op(nodes, i, ">=")) {
-                    op = ">=";
-                    len = 2;
-                } else if (match_op(nodes, i, "<<")) {
-                    op = "<<";
-                    len = 2;
-                } else if (match_op(nodes, i, ">>")) {
-                    op = ">>";
-                    len = 2;
-                } else if (match_op(nodes, i, "&&")) {
-                    op = "&&";
-                    len = 2;
-                } else if (match_op(nodes, i, "||")) {
-                    op = "||";
-                    len = 2;
+                for (auto candidate : multi_ops) {
+                    if (match_op(nodes, i, candidate)) {
+                        op = candidate;
+                        len = candidate.size();
+                        break;
+                    }
                 }
-                tok = make_token(*tn, op);
+
+                token tok = make_token(*tn, op);
                 res.push_back({ true, tok, {} });
                 i += len;
                 continue;
@@ -175,7 +131,7 @@ ast_node_ptr expression::parse_expression(
             auto middle = parse_expression(items, idx, 0);
             if (idx >= items.size() || !items[idx].is_op
                 || items[idx].tok.word != ":") {
-                throw std::runtime_error("expected ':' in ternary expression");
+                throw make_error("expected ':' in ternary expression", items);
             }
             token ctok = items[idx].tok;
             ++idx;
@@ -214,7 +170,7 @@ ast_node_ptr expression::parse_prefix(std::vector<item>& items, size_t& idx) {
         }
     }
     if (idx >= items.size()) {
-        throw std::runtime_error("unexpected end");
+        throw make_error("unexpected end", items);
     }
     auto node = items[idx].node;
     ++idx;
@@ -229,4 +185,29 @@ ast_node_ptr expression::parse_prefix(std::vector<item>& items, size_t& idx) {
         node = std::make_shared<unary_node>(tok, node, false, prec);
     }
     return node;
+}
+
+std::runtime_error expression::make_error(
+    const std::string& message, const std::vector<item>& expression,
+    const std::source_location& location
+) {
+    std::ostringstream oss;
+    oss << "[Expression-Error] " << message << ". ";
+    if (!expression.empty()) {
+        oss << "while parsing expression: ";
+        for (const auto& it : expression) {
+            if (it.is_op) {
+                oss << it.tok.word << ' ';
+            } else if (auto tn
+                       = std::dynamic_pointer_cast<token_node>(it.node)) {
+                oss << tn->value.word << ' ';
+            } else {
+                oss << "<node> ";
+            }
+        }
+        oss << '\n';
+    }
+    oss << "in file: " << location.file_name() << '(' << location.line() << ':'
+        << location.column() << ") `" << location.function_name() << "`";
+    return std::runtime_error(oss.str());
 }

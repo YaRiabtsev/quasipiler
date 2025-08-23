@@ -25,6 +25,7 @@
 #include "grouper.hpp"
 
 #include "expression.hpp"
+#include <algorithm>
 
 grouper::grouper(reader& r, const size_t limit)
     : src(r)
@@ -50,7 +51,6 @@ group_ptr grouper::parse(const group_kind kind) {
     result->kind = kind;
     parse_group(kind, group);
     identify(group, result);
-    parse_arithmetic(result);
     return result;
 }
 
@@ -105,6 +105,9 @@ void grouper::peek() {
 }
 
 group_ptr grouper::identify_subgroup(const group_ptr& group) const {
+    if (std::dynamic_pointer_cast<placeholder_node>(group)) {
+        return group;
+    }
     group_ptr inode;
     const auto kind = group->kind;
     if (kind == group_kind::body || kind == group_kind::list
@@ -116,59 +119,83 @@ group_ptr grouper::identify_subgroup(const group_ptr& group) const {
     inode->limit = limit;
     inode->kind = kind;
     identify(group, inode);
-    parse_arithmetic(inode);
     return inode;
+}
+
+bool grouper::is_secondary_keyword(const std::string& kw) {
+    return kw == "else" || kw == "elif" || kw == "catch" || kw == "finally";
+}
+
+std::string grouper::keyword_from_node(const ast_node_ptr& node) {
+    if (const auto ctrl = std::dynamic_pointer_cast<control_node>(node)) {
+        return ctrl->value.word;
+    }
+    if (const auto cond = std::dynamic_pointer_cast<condition_node>(node)) {
+        return cond->value.word;
+    }
+    return {};
+}
+
+group_ptr grouper::fetch_previous_command(
+    const group_ptr& result, const std::string& kw, const group_ptr& inode
+) const {
+    if (result->empty()) {
+        throw make_error("orphan secondary keyword: " + kw, inode);
+    }
+    const auto prev
+        = std::dynamic_pointer_cast<group_node>(result->nodes.back());
+    if (!prev || prev->nodes.empty() || prev->kind != group_kind::command) {
+        throw make_error("invalid predecessor for keyword: " + kw, inode);
+    }
+    return prev;
+}
+
+std::string grouper::fetch_previous_keyword(
+    const group_ptr& prev, const std::string& kw, const group_ptr& inode
+) const {
+    const auto last = prev->nodes.back();
+    if (const auto ctrl = std::dynamic_pointer_cast<control_node>(last)) {
+        return ctrl->value.word;
+    }
+    if (const auto cond = std::dynamic_pointer_cast<condition_node>(last)) {
+        return cond->value.word;
+    }
+    throw make_error("invalid predecessor for keyword: " + kw, inode);
+}
+
+void grouper::validate_chain(
+    const std::string& prev_kw, const std::string& kw, const group_ptr& inode
+) const {
+    bool allowed = false;
+    if (kw == "else" || kw == "elif") {
+        allowed = (prev_kw == "if" || prev_kw == "elif");
+    } else if (kw == "catch" || kw == "finally") {
+        allowed = (prev_kw == "try" || prev_kw == "catch");
+    }
+    if (!allowed) {
+        throw make_error(
+            "unexpected keyword order: " + prev_kw + " before " + kw, inode
+        );
+    }
 }
 
 bool grouper::handle_chain(
     const group_ptr& result, const group_ptr& inode
 ) const {
     const auto first = inode->nodes.front();
-    std::string kw;
-    if (const auto ctrl = std::dynamic_pointer_cast<control_node>(first)) {
-        kw = ctrl->value.word;
-    } else if (const auto cond
-               = std::dynamic_pointer_cast<condition_node>(first)) {
-        kw = cond->value.word;
+    const auto kw = keyword_from_node(first);
+    if (!is_secondary_keyword(kw)) {
+        return false;
     }
-    if (kw == "else" || kw == "elif" || kw == "catch" || kw == "finally") {
-        if (result->empty()) {
-            throw make_error("orphan secondary keyword: " + kw, inode);
-        }
-        const auto prev
-            = std::dynamic_pointer_cast<group_node>(result->nodes.back());
-        if (!prev || prev->nodes.empty() || prev->kind != group_kind::command) {
-            throw make_error("invalid predecessor for keyword: " + kw, inode);
-        }
-        const auto last = prev->nodes.back();
-        std::string prev_kw;
-        if (const auto ctrl = std::dynamic_pointer_cast<control_node>(last)) {
-            prev_kw = ctrl->value.word;
-        } else if (const auto cond
-                   = std::dynamic_pointer_cast<condition_node>(last)) {
-            prev_kw = cond->value.word;
-        } else {
-            throw make_error("invalid predecessor for keyword: " + kw, inode);
-        }
-        bool allowed = false;
-        if (kw == "else" || kw == "elif") {
-            allowed = (prev_kw == "if" || prev_kw == "elif");
-        } else if (kw == "catch" || kw == "finally") {
-            allowed = (prev_kw == "try" || prev_kw == "catch");
-        }
-        if (!allowed) {
-            throw make_error(
-                "unexpected keyword order: " + prev_kw + " before " + kw, inode
-            );
-        }
-        result->pop_back();
-        for (auto& ch : inode->nodes) {
-            append(prev, ch);
-        }
-        append(result, prev);
-        return true;
+    const auto prev = fetch_previous_command(result, kw, inode);
+    const auto prev_kw = fetch_previous_keyword(prev, kw, inode);
+    validate_chain(prev_kw, kw, inode);
+    result->pop_back();
+    for (auto& ch : inode->nodes) {
+        append(prev, ch);
     }
-    return false;
+    append(result, prev);
+    return true;
 }
 
 bool grouper::append_group(
@@ -193,12 +220,19 @@ bool grouper::append_group(
             append(result, ctrl);
             return true;
         }
-        if (const auto callexp = std::dynamic_pointer_cast<callexp_node>(top);
-            callexp && kind == group_kind::body) {
-            const auto fundecl = std::make_shared<fundecl_node>(callexp);
-            fundecl->set_body(node);
-            append(result, fundecl);
-            return true;
+        if (const auto callexp = std::dynamic_pointer_cast<callexp_node>(top)) {
+            if (kind == group_kind::body) {
+                const auto fundecl = std::make_shared<fundecl_node>(callexp);
+                fundecl->set_body(node);
+                append(result, fundecl);
+                return true;
+            }
+            if (kind == group_kind::paren) {
+                const auto icall = std::make_shared<imcallexp_node>(top);
+                icall->set_paren(node);
+                append(result, icall);
+                return true;
+            }
         }
         const auto tok = std::dynamic_pointer_cast<token_node>(top);
         if (tok && tok->value.kind == token_kind::keyword
@@ -208,40 +242,23 @@ bool grouper::append_group(
             append(result, callexp);
             return true;
         }
+        if (kind == group_kind::paren && !tok) {
+            const auto icall = std::make_shared<imcallexp_node>(top);
+            icall->set_paren(node);
+            append(result, icall);
+            return true;
+        }
         append(result, top);
     }
     return false;
-}
-
-void grouper::identify_body(const group_ptr& group) const {
-    const auto body = std::make_shared<group_node>();
-    body->limit = limit;
-    while (!group->empty()) {
-        auto top = group->nodes.back();
-        group->pop_back();
-        if (auto tok = std::dynamic_pointer_cast<token_node>(top)) {
-            if (const auto ctrl
-                = std::dynamic_pointer_cast<control_node>(tok)) {
-                ctrl->set_body(body);
-                append(group, ctrl);
-                break;
-            }
-            if (auto callexp = std::dynamic_pointer_cast<callexp_node>(tok)) {
-                const auto fundecl = std::make_shared<fundecl_node>(callexp);
-                fundecl->set_body(body);
-                append(group, fundecl);
-                break;
-            }
-        }
-        append(body, top);
-    }
 }
 
 void grouper::identify(const group_ptr& group, const group_ptr& result) const {
     bool wait_for_condition = false;
     bool wait_for_body = false;
 
-    for (auto& node : group->nodes) {
+    for (size_t i = 0; i < group->nodes.size(); ++i) {
+        auto node = group->nodes[i];
         bool is_group = false;
         group_kind kind {};
 
@@ -267,6 +284,31 @@ void grouper::identify(const group_ptr& group, const group_ptr& result) const {
                 )) {
                 continue;
             }
+        }
+        if (wait_for_body && !is_group) {
+            const auto tail = std::make_shared<group_node>();
+            tail->limit = limit;
+            for (; i < group->nodes.size(); ++i) {
+                append(tail, group->nodes[i]);
+            }
+            const auto body = std::make_shared<group_node>();
+            body->limit = limit;
+            identify(tail, body);
+
+            const auto top = result->nodes.back();
+            result->pop_back();
+            if (const auto ctrl
+                = std::dynamic_pointer_cast<control_node>(top)) {
+                ctrl->set_body(body);
+                append(result, ctrl);
+            } else if (auto callexp
+                       = std::dynamic_pointer_cast<callexp_node>(top)) {
+                const auto fundecl = std::make_shared<fundecl_node>(callexp);
+                fundecl->set_body(body);
+                append(result, fundecl);
+            }
+            wait_for_body = false;
+            continue;
         }
         if (const auto tok = std::dynamic_pointer_cast<token_node>(node)) {
             if (tok->value.kind == token_kind::keyword) {
@@ -295,8 +337,10 @@ void grouper::identify(const group_ptr& group, const group_ptr& result) const {
         }
         append(result, node);
     }
-    if (wait_for_body) {
-        identify_body(result);
+    try {
+        parse_arithmetic(result);
+    } catch (const std::runtime_error& e) {
+        throw make_error(e.what(), result);
     }
 }
 
@@ -461,7 +505,7 @@ void grouper::parse_arithmetic(const group_ptr& group) const {
         }
         auto items = expression::make_items(group->nodes);
         size_t idx = 0;
-        auto expr = expression::parse_expression(items, idx, 0);
+        const auto expr = expression::parse_expression(items, idx, 0);
         if (idx == items.size()) {
             group->nodes.clear();
             group->weights = {};

@@ -105,7 +105,7 @@ void reader::reload_buffer() {
     }
     file_offset = ifs.tellg();
     buffer.resize(static_cast<size_t>(max_buffer_size));
-    ifs.read(&buffer[0], max_buffer_size);
+    ifs.read(buffer.data(), max_buffer_size);
     const auto got = ifs.gcount();
     buffer.resize(static_cast<size_t>(got));
     buffer_position = 0;
@@ -246,9 +246,7 @@ void reader::read_string(std::string& into) {
     advance_char();
 }
 
-token_kind reader::read_number(std::string& into) {
-    into.clear();
-    bool is_float = false;
+void reader::read_integer_part(std::string& into) {
     if (is_valid() && peek_char() == '0') {
         into += get_char();
         if (is_valid() && std::isdigit(peek_uchar())) {
@@ -261,9 +259,10 @@ token_kind reader::read_number(std::string& into) {
     } else {
         throw make_error("expected digit");
     }
+}
 
+bool reader::read_fraction_part(std::string& into) {
     if (is_valid() && peek_char() == '.') {
-        is_float = true;
         into += get_char();
         if (!is_valid() || !std::isdigit(peek_uchar())) {
             throw make_error("digit expected after decimal");
@@ -271,10 +270,13 @@ token_kind reader::read_number(std::string& into) {
         while (is_valid() && std::isdigit(peek_uchar())) {
             into += get_char();
         }
+        return true;
     }
+    return false;
+}
 
+bool reader::read_exponent_part(std::string& into) {
     if (is_valid() && (peek_char() == 'e' || peek_char() == 'E')) {
-        is_float = true;
         into += get_char();
         if (is_valid() && (peek_char() == '+' || peek_char() == '-')) {
             into += get_char();
@@ -285,6 +287,17 @@ token_kind reader::read_number(std::string& into) {
         while (is_valid() && std::isdigit(peek_uchar())) {
             into += get_char();
         }
+        return true;
+    }
+    return false;
+}
+
+token_kind reader::read_number(std::string& into) {
+    into.clear();
+    read_integer_part(into);
+    bool is_float = read_fraction_part(into);
+    if (read_exponent_part(into)) {
+        is_float = true;
     }
     return is_float ? token_kind::floating : token_kind::integer;
 }
