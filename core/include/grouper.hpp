@@ -43,6 +43,9 @@ public:
      */
     group_ptr parse(group_kind kind = group_kind::file);
 
+    /// Restore one merged command chain from an exact, bounded source span.
+    group_ptr parse_chain();
+
 private:
     reader& src;
     size_t limit;
@@ -106,14 +109,19 @@ private:
     /**
      * @brief Finalize a wrapped sub-group when a closing bracket is seen.
      */
-    void close_wrapped(const group_ptr& group, group_ptr& top, group_kind kind);
+    void close_wrapped(
+        const group_ptr& group, group_ptr& top, group_kind kind,
+        bool bounded_sequence
+    );
     /**
      * @brief Parse a sequence of tokens into the supplied group.
      *
      * This is the core loop that recognises brackets and separators and
      * builds the initial hierarchical structure.
      */
-    void parse_group(group_kind kind, group_ptr& group);
+    void parse_group(
+        group_kind kind, group_ptr& group, bool bounded_sequence = false
+    );
     /**
      * @brief Safely append a node to its parent group.
      */

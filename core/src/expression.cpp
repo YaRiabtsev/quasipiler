@@ -23,6 +23,7 @@
  */
 
 #include "expression.hpp"
+#include "operators.hpp"
 
 #include <array>
 #include <source_location>
@@ -31,21 +32,15 @@
 #include <unordered_map>
 
 const std::unordered_map<std::string, std::pair<int, bool>>
-    expression::binary_ops = { { "=", { 1, true } },    { "+=", { 1, true } },
-                               { "-=", { 1, true } },   { "*=", { 1, true } },
-                               { "/=", { 1, true } },   { "%=", { 1, true } },
-                               { "^=", { 1, true } },   { "|=", { 1, true } },
-                               { "&=", { 1, true } },   { "<<=", { 1, true } },
-                               { ">>=", { 1, true } },  { "||", { 3, false } },
-                               { "&&", { 4, false } },  { "|", { 5, false } },
-                               { "^", { 6, false } },   { "&", { 7, false } },
-                               { "==", { 8, false } },  { "!=", { 8, false } },
-                               { "<", { 9, false } },   { "<=", { 9, false } },
-                               { ">", { 9, false } },   { ">=", { 9, false } },
-                               { "<<", { 10, false } }, { ">>", { 10, false } },
-                               { "+", { 11, false } },  { "-", { 11, false } },
-                               { "*", { 12, false } },  { "/", { 12, false } },
-                               { "%", { 12, false } } };
+    expression::binary_ops = [] {
+        std::unordered_map<std::string, std::pair<int, bool>> result;
+        for (const auto& op : binary_operators) {
+            result.emplace(
+                op.spelling, std::make_pair(op.precedence, op.right_associative)
+            );
+        }
+        return result;
+    }();
 
 const std::unordered_map<std::string, int> expression::prefix_ops
     = { { "+", 13 }, { "-", 13 },  { "!", 13 },
@@ -198,8 +193,9 @@ std::runtime_error expression::make_error(
         for (const auto& it : expression) {
             if (it.is_op) {
                 oss << it.tok.word << ' ';
-            } else if (auto tn
-                       = std::dynamic_pointer_cast<token_node>(it.node)) {
+            } else if (
+                auto tn = std::dynamic_pointer_cast<token_node>(it.node)
+            ) {
                 oss << tn->value.word << ' ';
             } else {
                 oss << "<node> ";

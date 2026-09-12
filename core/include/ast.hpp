@@ -26,6 +26,7 @@
 #define AST_HPP
 
 #include <memory>
+#include <optional>
 #include <queue>
 #include <string>
 #include <vector>
@@ -73,7 +74,10 @@ enum class group_kind { file, body, list, paren, command, item, key, halt };
  * @c fixed_size within @c limit.
  */
 struct group_node : ast_node {
-    size_t limit; ///< Maximum allowed node weight
+    using ast_node::dump;
+    size_t limit { 64 }; ///< Maximum allowed node weight
+    std::optional<source_span> span; ///< Source bytes and parse boundary
+    bool is_chain { false }; ///< Merged commands need sequence reconstruction
     group_kind kind { group_kind::halt };
     std::vector<ast_node_ptr> nodes;
     /// queue of heavy child nodes: <node_size, node_index>
@@ -88,9 +92,8 @@ struct group_node : ast_node {
      * expanded later.
      *
      * @param node Node to append.
-     * @param src  Reader used to reconstruct squeezed subtrees on demand.
      */
-    void append(ast_node_ptr node, const reader& src);
+    void append(ast_node_ptr node);
     [[nodiscard]] bool empty() const noexcept override;
     [[nodiscard]] size_t size() const noexcept;
     [[nodiscard]] ast_node const* get() const noexcept override;
@@ -103,13 +106,13 @@ struct group_node : ast_node {
      * @brief Replace a child group with a placeholder.
      *
      * The placeholder stores enough information to re-read the original subtree
-     * from @p src later. This is used when a group's @c fixed_size would exceed
-     * the configured limit and thus needs to be collapsed.
+     * from its immutable source span later. This is used when a group's @c
+     * fixed_size would exceed the configured limit and thus needs to be
+     * collapsed.
      *
      * @param index Index of the child to replace.
-     * @param src   Reader used to recreate the subtree if needed.
      */
-    void squeeze(size_t index, const reader& src);
+    void squeeze(size_t index);
     void pop_back();
 };
 
@@ -126,11 +129,14 @@ using wrapped_ptr = std::shared_ptr<wrapped_node>;
  * @brief Node standing in place of a squeezed sub-tree.
  *
  * When a group exceeds the configured size limit it can be replaced by a
- * placeholder node. The original reader is stored so the subtree can be
- * reconstructed on demand.
+ * placeholder node. An owning source span keeps reconstruction independent
+ * of parser lifetime. Materialization creates a fresh tree and cursor.
  */
 struct placeholder_node final : wrapped_node {
-    reader* src { nullptr };
+    using group_node::dump;
+    [[nodiscard]] group_ptr materialize() const;
+    [[nodiscard]] bool empty() const noexcept override;
+    [[nodiscard]] ast_node const* first() const override;
     void dump(
         std::ostream& os, const std::string& prefix, bool is_last, bool full
     ) const override;

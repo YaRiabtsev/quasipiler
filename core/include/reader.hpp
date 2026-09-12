@@ -25,18 +25,9 @@
 #ifndef READER_HPP
 #define READER_HPP
 
-#include <filesystem>
-#include <fstream>
+#include "source.hpp"
 #include <source_location>
-
-/**
- * @brief Byte and line location within the input stream.
- */
-struct position {
-    std::streamoff offset; ///< absolute offset from the beginning of the file
-    int line; ///< zero based line number
-    int column; ///< zero based column number
-};
+#include <stdexcept>
 
 enum class token_kind {
     eof,
@@ -81,7 +72,13 @@ public:
         const std::filesystem::path& path, std::streamsize buffer_size = 4096
     );
 
-    explicit reader(std::string& data) noexcept;
+    explicit reader(std::string& data);
+
+    explicit reader(source_ptr input);
+    explicit reader(source_span input);
+
+    const source_span& input() const noexcept;
+    source_span span(position begin, position end) const;
 
     ~reader();
     /**
@@ -102,14 +99,8 @@ public:
     position get_position() const;
 
 private:
-    std::ifstream ifs;
-    std::string filename;
-    std::string buffer;
-    std::streamsize max_buffer_size {};
-    std::streamoff file_offset {};
-    int line { 0 };
-    int column { 0 };
-    size_t buffer_position { 0 };
+    source_span input_;
+    position cursor_;
 
     bool is_valid() const noexcept;
 
@@ -120,8 +111,6 @@ private:
     char get_char();
 
     void advance_char();
-
-    void reload_buffer();
 
     void read_whitespace(std::string& into);
 

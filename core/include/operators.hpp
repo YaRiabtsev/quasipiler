@@ -22,9 +22,38 @@
  * SOFTWARE.
  */
 
-#include <gtest/gtest.h>
+#ifndef OPERATORS_HPP
+#define OPERATORS_HPP
 
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+#include <array>
+#include <string_view>
+
+struct binary_operator_info {
+    std::string_view spelling;
+    int precedence;
+    bool right_associative;
+};
+
+inline constexpr auto binary_operators = std::to_array<binary_operator_info>(
+    { { "=", 1, true },   { "+=", 1, true },   { "-=", 1, true },
+      { "*=", 1, true },  { "/=", 1, true },   { "%=", 1, true },
+      { "^=", 1, true },  { "|=", 1, true },   { "&=", 1, true },
+      { "<<=", 1, true }, { ">>=", 1, true },  { "||", 3, false },
+      { "&&", 4, false }, { "|", 5, false },   { "^", 6, false },
+      { "&", 7, false },  { "==", 8, false },  { "!=", 8, false },
+      { "<", 9, false },  { "<=", 9, false },  { ">", 9, false },
+      { ">=", 9, false }, { "<<", 10, false }, { ">>", 10, false },
+      { "+", 11, false }, { "-", 11, false },  { "*", 12, false },
+      { "/", 12, false }, { "%", 12, false } }
+);
+
+inline constexpr const binary_operator_info*
+binary_operator(std::string_view op) {
+    for (const auto& candidate : binary_operators) {
+        if (candidate.spelling == op)
+            return &candidate;
+    }
+    return nullptr;
 }
+
+#endif // OPERATORS_HPP

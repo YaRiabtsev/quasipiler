@@ -23,6 +23,7 @@
  */
 
 #include "ast.hpp"
+#include "grouper.hpp"
 
 ast_node::~ast_node() = default;
 
@@ -69,37 +70,39 @@ const char* group_kind_name(group_kind k) noexcept {
     return names[static_cast<size_t>(k)];
 }
 
+group_ptr placeholder_node::materialize() const {
+    if (!span) {
+        throw std::runtime_error("placeholder has no source span");
+    }
+    reader input(*span);
+    grouper parser { input, limit };
+    auto restored = is_chain ? parser.parse_chain() : parser.parse(kind);
+    if (input.get_position() != span->end()) {
+        throw std::runtime_error("placeholder did not consume its source span");
+    }
+    if (auto wrapped = std::dynamic_pointer_cast<wrapped_node>(restored)) {
+        wrapped->start = start;
+    }
+    return restored;
+}
+
+bool placeholder_node::empty() const noexcept { return false; }
+
+ast_node const* placeholder_node::first() const { return this; }
+
 void placeholder_node::dump(
     std::ostream& os, const std::string& prefix, const bool is_last,
     const bool full
 ) const {
-    if (full && src != nullptr) {
-        const auto position = src->get_position();
-        src->jump_to_position(start);
-        grouper g { *src, limit };
-        try {
-            auto group = g.parse(kind);
-            group->dump(os, prefix, is_last, full);
-        } catch (const std::runtime_error& e) {
-            src->jump_to_position(start);
-            token current;
-            src->next_token(current);
-            std::ostringstream msg;
-            msg << "[PlaceholderNode-Error] during parsing at position <"
-                << position.line << ":" << position.column
-                << "> with first token: ";
-            current.dump(msg);
-            msg << prefix << e.what() << "\n";
-            throw std::runtime_error(msg.str());
-        }
-        src->jump_to_position(position);
+    if (full) {
+        materialize()->dump(os, prefix, is_last, true);
     } else {
         os << prefix << (is_last ? "`-" : "|-") << "Placeholder("
            << group_kind_name(kind) << ") [" << full_size << " nested nodes]\n";
     }
 }
 
-void group_node::append(ast_node_ptr node, const reader& src) {
+void group_node::append(ast_node_ptr node) {
     size_t exclude = (size() == 0 ? 1 : 0);
     fixed_size += node->fixed_size - exclude;
     full_size += node->full_size - exclude;
@@ -110,9 +113,9 @@ void group_node::append(ast_node_ptr node, const reader& src) {
     while (!weights.empty() && fixed_size > limit) {
         auto [weight, index] = weights.top();
         weights.pop();
-        fixed_size += 1 - weight;
-        if (!std::dynamic_pointer_cast<placeholder_node>(nodes[index])) {
-            squeeze(index, src);
+        if (index < nodes.size() && nodes[index]->fixed_size == weight
+            && !std::dynamic_pointer_cast<placeholder_node>(nodes[index])) {
+            squeeze(index);
         }
     }
     if (fixed_size > limit) {
@@ -170,11 +173,14 @@ const position& group_node::get_start() const {
     return nodes[0]->get_start();
 }
 
-void group_node::squeeze(const size_t index, const reader& src) {
+void group_node::squeeze(const size_t index) {
     if (index >= nodes.size()) {
         throw std::out_of_range("index out of range for group node");
     }
     auto group = std::dynamic_pointer_cast<group_node>(nodes[index]);
+    if (std::dynamic_pointer_cast<placeholder_node>(group)) {
+        return;
+    }
     if (!group) {
         std::stringstream ss;
         nodes[index]->dump(ss, "\t", true, true);
@@ -188,17 +194,20 @@ void group_node::squeeze(const size_t index, const reader& src) {
             "cannot squeeze empty group node at index " + std::to_string(index)
         );
     }
+    if (!group->span) {
+        throw std::runtime_error(
+            "cannot squeeze a group without a source span"
+        );
+    }
     const auto ph = std::make_shared<placeholder_node>();
-    ph->src = const_cast<reader*>(&src);
+    ph->span = group->span;
     ph->limit = group->limit;
     ph->kind = group->kind;
-    if (auto wn = std::dynamic_pointer_cast<wrapped_node>(group)) {
-        ph->start = wn->nodes[0]->get_start();
-    } else {
-        ph->start = group->get_start();
-    }
+    ph->is_chain = group->is_chain;
+    ph->start = group->get_start();
     ph->full_size = group->full_size;
     ph->fixed_size = 1;
+    fixed_size -= group->fixed_size - 1;
     nodes[index] = ph;
 }
 
@@ -209,6 +218,13 @@ void group_node::pop_back() {
     fixed_size -= nodes.back()->fixed_size;
     full_size -= nodes.back()->full_size;
     nodes.pop_back();
+    weights = {};
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        if (nodes[i]->fixed_size > 1
+            && std::dynamic_pointer_cast<group_node>(nodes[i])) {
+            weights.emplace(nodes[i]->fixed_size, i);
+        }
+    }
     if (nodes.empty()) {
         fixed_size = 1;
         full_size = 1;

@@ -26,6 +26,7 @@
 
 #include "expression.hpp"
 #include <algorithm>
+#include <limits>
 
 grouper::grouper(reader& r, const size_t limit)
     : src(r)
@@ -50,24 +51,64 @@ group_ptr grouper::parse(const group_kind kind) {
     result->limit = limit;
     result->kind = kind;
     parse_group(kind, group);
+    // A halt is the trailing statement itself, not a container around it.
+    // parse_group adds a container while consuming a closing delimiter/EOF.
+    if (kind == group_kind::halt && group->size() == 1) {
+        const auto trailing
+            = std::dynamic_pointer_cast<group_node>(group->nodes.front());
+        if (trailing && trailing->kind == group_kind::halt) {
+            group = trailing;
+        }
+    }
     identify(group, result);
     return result;
 }
 
-void grouper::parse_group(const group_kind kind, group_ptr& group) {
+group_ptr grouper::parse_chain() {
+    auto raw = std::make_shared<group_node>();
+    raw->limit = std::numeric_limits<size_t>::max();
+    raw->kind = group_kind::file;
+    parse_group(group_kind::file, raw, true);
+    const auto result = std::make_shared<group_node>();
+    // This temporary container must not squeeze the chain it reconstructs.
+    result->limit = std::numeric_limits<size_t>::max();
+    result->kind = group_kind::file;
+    identify(raw, result);
+    if (result->nodes.size() == 2 && result->nodes.back()->empty()) {
+        result->pop_back();
+    }
+    if (result->nodes.size() != 1) {
+        throw make_error("expected one bounded command chain", result);
+    }
+    const auto chain = std::dynamic_pointer_cast<group_node>(result->nodes[0]);
+    if (!chain || !chain->is_chain) {
+        throw make_error("expected a merged command chain", result);
+    }
+    return chain;
+}
+
+void grouper::parse_group(
+    const group_kind kind, group_ptr& group, const bool bounded_sequence
+) {
+    const auto begin = src.get_position();
     auto top = std::make_shared<group_node>();
     top->limit = limit;
+    top->span = src.span(begin, begin);
     while (true) {
         peek();
         if (current.kind == token_kind::separator) {
             if (append_command(group, top, kind)) {
+                group->span = src.span(begin, src.get_position());
                 return;
             }
         } else if (current.kind == token_kind::open_bracket) {
             append_wrapped(top);
-        } else if (current.kind == token_kind::close_bracket
-                   || current.kind == token_kind::eof) {
-            close_wrapped(group, top, kind);
+        } else if (
+            current.kind == token_kind::close_bracket
+            || current.kind == token_kind::eof
+        ) {
+            close_wrapped(group, top, kind, bounded_sequence);
+            group->span = src.span(begin, src.get_position());
             return;
         } else {
             auto tk = std::make_shared<token_node>();
@@ -82,7 +123,7 @@ void grouper::append(
     const std::source_location& location
 ) const {
     try {
-        parent->append(node, src);
+        parent->append(node);
     } catch (const std::runtime_error& e) {
         std::stringstream msg;
         msg << "failed to append node: \n";
@@ -191,6 +232,10 @@ bool grouper::handle_chain(
     const auto prev_kw = fetch_previous_keyword(prev, kw, inode);
     validate_chain(prev_kw, kw, inode);
     result->pop_back();
+    if (prev->span && inode->span) {
+        prev->span = src.span(prev->span->begin(), inode->span->end());
+    }
+    prev->is_chain = true;
     for (auto& ch : inode->nodes) {
         append(prev, ch);
     }
@@ -254,6 +299,14 @@ bool grouper::append_group(
 }
 
 void grouper::identify(const group_ptr& group, const group_ptr& result) const {
+    result->span = group->span;
+    result->is_chain = group->is_chain;
+    if (const auto wrapped = std::dynamic_pointer_cast<wrapped_node>(group)) {
+        if (const auto output
+            = std::dynamic_pointer_cast<wrapped_node>(result)) {
+            output->start = wrapped->start;
+        }
+    }
     bool wait_for_condition = false;
     bool wait_for_body = false;
 
@@ -288,6 +341,9 @@ void grouper::identify(const group_ptr& group, const group_ptr& result) const {
         if (wait_for_body && !is_group) {
             const auto tail = std::make_shared<group_node>();
             tail->limit = limit;
+            if (group->span) {
+                tail->span = src.span(node->get_start(), group->span->end());
+            }
             for (; i < group->nodes.size(); ++i) {
                 append(tail, group->nodes[i]);
             }
@@ -301,8 +357,9 @@ void grouper::identify(const group_ptr& group, const group_ptr& result) const {
                 = std::dynamic_pointer_cast<control_node>(top)) {
                 ctrl->set_body(body);
                 append(result, ctrl);
-            } else if (auto callexp
-                       = std::dynamic_pointer_cast<callexp_node>(top)) {
+            } else if (
+                auto callexp = std::dynamic_pointer_cast<callexp_node>(top)
+            ) {
                 const auto fundecl = std::make_shared<fundecl_node>(callexp);
                 fundecl->set_body(body);
                 append(result, fundecl);
@@ -347,6 +404,7 @@ void grouper::identify(const group_ptr& group, const group_ptr& result) const {
 bool grouper::append_command(
     group_ptr& group, group_ptr& top, const group_kind kind
 ) const {
+    top->span = src.span(top->span->begin(), src.get_position());
     if (current.word == ":") {
         top->kind = group_kind::key;
     } else if (current.word == ",") {
@@ -371,6 +429,7 @@ bool grouper::append_command(
     append(group, top);
     top = std::make_shared<group_node>();
     top->limit = limit;
+    top->span = src.span(src.get_position(), src.get_position());
     return false;
 }
 
@@ -395,8 +454,10 @@ void grouper::append_wrapped(const group_ptr& top) {
 }
 
 void grouper::close_wrapped(
-    const group_ptr& group, group_ptr& top, const group_kind kind
+    const group_ptr& group, group_ptr& top, const group_kind kind,
+    const bool bounded_sequence
 ) {
+    top->span = src.span(top->span->begin(), src.get_position());
     append(group, top);
     top = std::make_shared<group_node>();
     top->limit = limit;
@@ -410,6 +471,10 @@ void grouper::close_wrapped(
         group->kind = group_kind::paren;
     } else {
         throw make_error("unexpected close bracket: " + current.word, group);
+    }
+    if (bounded_sequence && src.get_position() == src.input().end()) {
+        group->kind = kind;
+        return;
     }
     if (kind == group_kind::halt) {
         reuse = true;
@@ -491,7 +556,7 @@ void grouper::parse_arithmetic(const group_ptr& group) const {
                 group->weights = {};
                 group->fixed_size = 1;
                 group->full_size = 1;
-                group->append(expr, src);
+                group->append(expr);
             }
             return;
         }

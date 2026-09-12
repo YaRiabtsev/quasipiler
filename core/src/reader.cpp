@@ -25,6 +25,9 @@
 #include "reader.hpp"
 
 #include <cassert>
+#include <cctype>
+#include <sstream>
+#include <utility>
 
 token::~token() = default;
 
@@ -48,37 +51,41 @@ void token::dump(std::ostream& os) const noexcept { dump(os, "", true); }
 reader::reader(
     const std::filesystem::path& path, const std::streamsize buffer_size
 )
-    : max_buffer_size(buffer_size) {
-    ifs.open(path, std::ios::in | std::ios::binary);
-    filename = path.string();
-    if (!ifs.is_open()) {
-        throw std::invalid_argument("cannot open file: " + filename);
-    }
-    ifs.seekg(0, std::ios::beg);
-    file_offset = ifs.tellg();
-    buffer.resize(static_cast<size_t>(max_buffer_size));
-    reload_buffer();
-}
+    : reader(source::from_file(path, buffer_size)) { }
 
-reader::reader(std::string& data) noexcept
-    : buffer(std::move(data)) {
-    if (!buffer.empty()) {
-        line = 0;
-        column = 0;
-    }
-}
+reader::reader(std::string& data)
+    : reader(source::from_memory(data)) { }
 
-reader::~reader() {
-    if (ifs.is_open()) {
-        ifs.close();
+reader::reader(source_ptr input)
+    : reader(source_span(input, 0, input ? input->size() : 0)) { }
+
+reader::reader(source_span input)
+    : input_(std::move(input))
+    , cursor_(input_.begin()) { }
+
+reader::~reader() = default;
+
+const source_span& reader::input() const noexcept { return input_; }
+
+source_span reader::span(const position begin, const position end) const {
+    if (begin.offset < input_.begin().offset
+        || end.offset > input_.end().offset) {
+        throw std::out_of_range("span exceeds reader bounds");
     }
+    const source_span result(input_.owner(), begin.offset, end.offset);
+    if (result.begin() != begin || result.end() != end) {
+        throw std::invalid_argument("span has inconsistent source positions");
+    }
+    return result;
 }
 
 bool reader::is_valid() const noexcept {
-    return !buffer.empty() && buffer_position < buffer.size();
+    return cursor_.offset < input_.end().offset;
 }
 
-char reader::peek_char() const noexcept { return buffer[buffer_position]; }
+char reader::peek_char() const noexcept {
+    return input_.owner()->text()[static_cast<size_t>(cursor_.offset)];
+}
 
 unsigned char reader::peek_uchar() const noexcept {
     return static_cast<unsigned char>(peek_char());
@@ -91,33 +98,19 @@ char reader::get_char() {
 }
 
 void reader::advance_char() {
-    assert(!buffer.empty());
-    ++buffer_position;
-    ++column;
-    if (buffer_position >= buffer.size()) {
-        reload_buffer();
+    assert(is_valid());
+    if (peek_char() == '\n') {
+        ++cursor_.line;
+        cursor_.column = 0;
+    } else {
+        ++cursor_.column;
     }
-}
-
-void reader::reload_buffer() {
-    if (!ifs.is_open() || ifs.eof()) {
-        return;
-    }
-    file_offset = ifs.tellg();
-    buffer.resize(static_cast<size_t>(max_buffer_size));
-    ifs.read(buffer.data(), max_buffer_size);
-    const auto got = ifs.gcount();
-    buffer.resize(static_cast<size_t>(got));
-    buffer_position = 0;
+    ++cursor_.offset;
 }
 
 void reader::read_whitespace(std::string& into) {
     into.clear();
     while (is_valid() && std::isspace(peek_uchar())) {
-        if (peek_char() == '\n') {
-            ++line;
-            column = -1;
-        }
         into += get_char();
     }
 }
@@ -142,10 +135,7 @@ void reader::read_comment(std::string& into) {
         }
         into += current_char;
         if (current_char == '\n') {
-            ++line;
-            column = -1;
             if (!is_multiline) {
-                column = 0;
                 break;
             }
         }
@@ -317,25 +307,13 @@ std::runtime_error reader::make_error(
     const std::string& message, const std::source_location& location
 ) const {
     std::ostringstream oss;
-    oss << "[Reader-Error] " << message << ". ";
+    oss << "[Reader-Error] " << message << ". " << input_.owner()->name() << ':'
+        << cursor_.line + 1 << ':' << cursor_.column + 1;
 #ifndef NDEBUG
-    if (!ifs.is_open()) {
-        oss << "no file open. ";
-    }
-    if (!is_valid()) {
-        oss << filename << " is open. ";
-        oss << "position is out of range. line: " << (line + 1)
-            << ", column: " << (column + 1) << " exceeds available input. ";
-    } else {
-        const char current_char = peek_char();
-        oss << "character '" << current_char
-            << "' (ASCII: " << static_cast<unsigned>(current_char)
-            << ") was found at line " << (line + 1) << ", column "
-            << (column + 1) << ". ";
-    }
-    oss << "in file: " << location.file_name() << '(' << location.line() << ':'
+    oss << " in " << location.file_name() << '(' << location.line() << ':'
         << location.column() << ") `" << location.function_name() << "`";
-    oss << std::endl << buffer;
+#else
+    (void)location;
 #endif
     return std::runtime_error(oss.str());
 }
@@ -395,31 +373,13 @@ void reader::next_token(token& out) {
 }
 
 void reader::jump_to_position(const position pos) {
-    if (pos.offset < 0) {
-        throw make_error("position is out of range");
+    if (pos.offset < input_.begin().offset || pos.offset > input_.end().offset
+        || input_.owner()->position_at(pos.offset) != pos) {
+        throw make_error("position is out of range or inconsistent");
     }
-    if (!ifs.is_open()) {
-        buffer_position = static_cast<size_t>(pos.offset);
-        if (buffer_position > buffer.size()) {
-            throw make_error("position is out of range");
-        }
-    } else {
-        ifs.clear();
-        ifs.seekg(pos.offset, std::ios::beg);
-        reload_buffer();
-    }
-    this->line = pos.line;
-    this->column = pos.column;
+    cursor_ = pos;
 }
 
-void reader::interrupt() {
-    if (ifs.is_open() && ifs.eof()) {
-        return;
-    }
-    throw make_error("interrupted");
-}
+void reader::interrupt() { throw make_error("interrupted"); }
 
-position reader::get_position() const {
-    return { file_offset + static_cast<std::streamoff>(buffer_position), line,
-             column };
-}
+position reader::get_position() const { return cursor_; }
